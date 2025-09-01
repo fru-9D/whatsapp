@@ -48,6 +48,19 @@ whatsapp_thumbnail: false
 # and send it to WhatsApp? URL previews can always be sent using the `com.beeper.linkpreviews`
 # key in the event content even if this is disabled.
 url_previews: false
+
+# Privacy settings to prevent contact information leakage between bridge users
+# Should the bridge respect contact names privacy? When enabled, each user will only
+# see their own contact names without affecting other users' ghost names. This prevents
+# contact name leakage while preserving the ability to see your own saved contact names.
+privacy_respect_contact_names: false
+
+# Should the bridge respect WhatsApp avatar privacy settings? When enabled, each user
+# only sees avatars they're authorized to see on WhatsApp, preventing avatar leakage
+# between bridge users.
+privacy_respect_avatars: false
+
+
 # Should polls be sent using unstable MSC3381 event types?
 extev_polls: false
 # Should view-once messages be disabled entirely?

@@ -604,13 +604,32 @@ func (wa *WhatsAppClient) syncGhost(jid types.JID, reason string, pictureID *str
 	if pictureID != nil && *pictureID != "" && ghost.AvatarID == networkid.AvatarID(*pictureID) {
 		return
 	}
+
+	// Privacy fix: Check if we should sync contact information
+	if wa.Main.Config.PrivacyRespectContactNames && reason == "contact event" {
+		log.Debug().Msg("Skipping ghost sync for contact event due to privacy settings")
+		return
+	}
+
 	userInfo, err := wa.getUserInfo(ctx, jid, pictureID != nil)
 	if err != nil {
 		log.Err(err).Msg("Failed to get user info")
 	} else {
-		ghost.UpdateInfo(ctx, userInfo)
-		log.Debug().Msg("Synced ghost info")
-		wa.syncAltGhostWithInfo(ctx, jid, userInfo)
+		// Only update contact info if privacy allows it
+		if !wa.Main.Config.PrivacyRespectContactNames || reason != "contact event" {
+			ghost.UpdateInfo(ctx, userInfo)
+			log.Debug().Msg("Synced ghost info")
+			wa.syncAltGhostWithInfo(ctx, jid, userInfo)
+		} else {
+			// Privacy mode: Only sync avatar, not contact names
+			if pictureID != nil {
+				publicUserInfo := &bridgev2.UserInfo{
+					ExtraUpdates: wa.getUserSpecificGhostAvatar,
+				}
+				ghost.UpdateInfo(ctx, publicUserInfo)
+				log.Debug().Msg("Synced ghost avatar only (privacy mode)")
+			}
+		}
 	}
 	go wa.syncRemoteProfile(ctx, ghost)
 }

@@ -159,13 +159,34 @@ func (wa *WhatsAppClient) doGhostResync(ctx context.Context, queue map[types.JID
 			log.Warn().Stringer("jid", jid).Msg("Didn't get info for puppet in background sync")
 			continue
 		}
-		userInfo, err := wa.getUserInfo(ctx, jid, info.PictureID != "" && string(ghost.AvatarID) != info.PictureID)
+
+		// Privacy fix: Skip contact info updates for ghost sync if privacy is enabled
+		fetchAvatar := info.PictureID != "" && string(ghost.AvatarID) != info.PictureID
+		if wa.Main.Config.PrivacyRespectAvatars {
+			// Still allow avatar sync with privacy checking
+			fetchAvatar = fetchAvatar
+		}
+
+		userInfo, err := wa.getUserInfo(ctx, jid, fetchAvatar)
 		if err != nil {
 			log.Err(err).Stringer("jid", jid).Msg("Failed to get user info for puppet in background sync")
 			continue
 		}
-		ghost.UpdateInfo(ctx, userInfo)
-		wa.syncAltGhostWithInfo(ctx, jid, userInfo)
+
+		// Only update ghost if privacy settings allow it
+		if !wa.Main.Config.PrivacyRespectContactNames {
+			ghost.UpdateInfo(ctx, userInfo)
+			wa.syncAltGhostWithInfo(ctx, jid, userInfo)
+		} else {
+			// Privacy mode: Only update avatar, not contact info
+			if fetchAvatar {
+				// Create UserInfo with only public data for avatar update
+				publicUserInfo := &bridgev2.UserInfo{
+					ExtraUpdates: wa.getUserSpecificGhostAvatar,
+				}
+				ghost.UpdateInfo(ctx, publicUserInfo)
+			}
+		}
 	}
 }
 
@@ -175,6 +196,19 @@ func (wa *WhatsAppClient) GetUserInfo(ctx context.Context, ghost *bridgev2.Ghost
 		return nil, nil
 	}
 	jid := waid.ParseUserID(ghost.ID)
+
+	// Privacy fix: When privacy is enabled, use this user's contact info only
+	if wa.Main.Config.PrivacyRespectContactNames {
+		// Get contact info from THIS user's contact store only
+		contact, err := wa.GetStore().Contacts.GetContact(ctx, jid)
+		if err != nil {
+			// If no contact found, use empty contact info (falls back to public data)
+			contact = types.ContactInfo{}
+		}
+		return wa.contactToUserInfo(ctx, jid, contact, ghost.AvatarID == ""), nil
+	}
+
+	// Privacy not enabled - use original behavior with contact names
 	return wa.getUserInfo(ctx, jid, ghost.AvatarID == "")
 }
 
@@ -225,8 +259,13 @@ func (wa *WhatsAppClient) contactToUserInfo(ctx context.Context, jid types.JID, 
 			}
 		}
 	}
+
+	// Privacy fix: When privacy is enabled, we still use full contact info
+	// because each user now only sees their own contact names
+	displayName := wa.Main.Config.FormatDisplayname(jid, phone, contact)
+
 	ui := &bridgev2.UserInfo{
-		Name:         ptr.Ptr(wa.Main.Config.FormatDisplayname(jid, phone, contact)),
+		Name:         ptr.Ptr(displayName),
 		IsBot:        ptr.Ptr(jid.IsBot()),
 		ExtraUpdates: updateGhostLastSyncAt,
 	}
@@ -236,7 +275,7 @@ func (wa *WhatsAppClient) contactToUserInfo(ctx context.Context, jid types.JID, 
 		ui.Identifiers = []string{fmt.Sprintf("tel:%s", phone)}
 	}
 	if getAvatar {
-		ui.ExtraUpdates = bridgev2.MergeExtraUpdaters(ui.ExtraUpdates, wa.fetchGhostAvatar)
+		ui.ExtraUpdates = bridgev2.MergeExtraUpdaters(ui.ExtraUpdates, wa.getUserSpecificGhostAvatar)
 	}
 	return ui
 }
@@ -333,9 +372,56 @@ func (wa *WhatsAppClient) fetchGhostAvatar(ctx context.Context, ghost *bridgev2.
 	return ghost.UpdateAvatar(ctx, wrappedAvatar)
 }
 
+func (wa *WhatsAppClient) getUserSpecificGhostAvatar(ctx context.Context, ghost *bridgev2.Ghost) bool {
+	// Privacy fix: Respect WhatsApp avatar privacy settings
+	if wa.Main.Config.PrivacyRespectAvatars {
+		jid := waid.ParseUserID(ghost.ID)
+		existingID := string(ghost.AvatarID)
+		if existingID == "remove" || existingID == "unauthorized" {
+			existingID = ""
+		}
+
+		// Use this user's WhatsApp session to check avatar access
+		avatar, err := wa.Client.GetProfilePictureInfo(jid, &whatsmeow.GetProfilePictureParams{ExistingID: existingID})
+		if errors.Is(err, whatsmeow.ErrProfilePictureNotSet) {
+			// Avatar not set - this is public information
+			wrappedAvatar := &bridgev2.Avatar{
+				ID:     "remove",
+				Remove: true,
+			}
+			return ghost.UpdateAvatar(ctx, wrappedAvatar)
+		} else if errors.Is(err, whatsmeow.ErrProfilePictureUnauthorized) {
+			// This user is not authorized to see the avatar - respect privacy
+			wrappedAvatar := &bridgev2.Avatar{
+				ID:     "unauthorized",
+				Remove: true,
+			}
+			return ghost.UpdateAvatar(ctx, wrappedAvatar)
+		} else if err != nil {
+			zerolog.Ctx(ctx).Err(err).Msg("Failed to get avatar info with privacy respect")
+			return false
+		} else if avatar == nil {
+			return false
+		}
+
+		// User is authorized to see the avatar - proceed with normal fetch
+		return wa.fetchGhostAvatar(ctx, ghost)
+	}
+
+	// Privacy not enabled - use original behavior
+	return wa.fetchGhostAvatar(ctx, ghost)
+}
+
 func (wa *WhatsAppClient) resyncContacts(forceAvatarSync, automatic bool) {
 	log := wa.UserLogin.Log.With().Str("action", "resync contacts").Logger()
 	ctx := log.WithContext(wa.Main.Bridge.BackgroundCtx)
+
+	// Privacy fix: Don't sync contact names if privacy is enabled
+	if wa.Main.Config.PrivacyRespectContactNames {
+		log.Debug().Msg("Skipping contact resync due to privacy_respect_contact_names setting")
+		return
+	}
+
 	if automatic && wa.isNewLogin {
 		log.Debug().Msg("Waiting for push name history sync before resyncing contacts")
 		timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)

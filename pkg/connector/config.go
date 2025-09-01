@@ -51,6 +51,10 @@ type Config struct {
 	DirectMediaAutoRequest      bool          `yaml:"direct_media_auto_request"`
 	InitialAutoReconnect        bool          `yaml:"initial_auto_reconnect"`
 
+	// Privacy settings
+	PrivacyRespectContactNames bool `yaml:"privacy_respect_contact_names"`
+	PrivacyRespectAvatars      bool `yaml:"privacy_respect_avatars"`
+
 	AnimatedSticker msgconv.AnimatedStickerConfig `yaml:"animated_sticker"`
 
 	HistorySync struct {
@@ -122,6 +126,9 @@ func upgradeConfig(helper up.Helper) {
 	helper.Copy(up.Int, "animated_sticker", "args", "width")
 	helper.Copy(up.Int, "animated_sticker", "args", "height")
 	helper.Copy(up.Int, "animated_sticker", "args", "fps")
+
+	helper.Copy(up.Bool, "privacy_respect_contact_names")
+	helper.Copy(up.Bool, "privacy_respect_avatars")
 
 	helper.Copy(up.Int, "history_sync", "max_initial_conversations")
 	helper.Copy(up.Bool, "history_sync", "request_full_sync")
