@@ -97,6 +97,10 @@ history_sync:
     # When enabled, media from history sync will show as placeholders but new messages will have media.
     # Historical media can still be requested manually by reacting with ♻️ emoji.
     skip_media_during_sync: true
+    # Skip RECENT sync and only process FULL sync data?
+    # When enabled, only FULL sync data will be processed, ignoring RECENT sync which typically contains ~3 months of data.
+    # This is useful if you want to rely solely on your full_sync_config parameters and avoid RECENT sync limitations.
+    skip_recent_sync: true
     # Configuration parameters that are sent to the phone along with the request full sync flag.
     # By default, (when the values are null or 0), the config isn't sent at all.
     full_sync_config:

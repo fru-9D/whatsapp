@@ -173,6 +173,15 @@ func (wa *WhatsAppClient) handleWAHistorySync(ctx context.Context, evt *waHistor
 			Msg("Ignoring history sync")
 		return false, nil
 	}
+
+	// Skip RECENT sync if configured to do so
+	if evt.GetSyncType() == waHistorySync.HistorySync_RECENT && wa.Main.Config.HistorySync.SkipRecentSync {
+		log.Info().
+			Int("conversation_count", len(evt.GetConversations())).
+			Int("past_participant_count", len(evt.GetPastParticipants())).
+			Msg("Skipping RECENT history sync as configured")
+		return false, nil
+	}
 	log.Info().
 		Int("conversation_count", len(evt.GetConversations())).
 		Int("past_participant_count", len(evt.GetPastParticipants())).
@@ -294,8 +303,8 @@ func (wa *WhatsAppClient) handleWAHistorySync(ctx context.Context, evt *waHistor
 		Int("total_message_count", totalMessageCount).
 		Dur("duration", time.Since(start)).
 		Msg("Finished storing history sync")
-	resetTimer := evt.GetSyncType() == waHistorySync.HistorySync_RECENT ||
-		evt.GetSyncType() == waHistorySync.HistorySync_FULL
+	resetTimer := evt.GetSyncType() == waHistorySync.HistorySync_FULL ||
+		(evt.GetSyncType() == waHistorySync.HistorySync_RECENT && !wa.Main.Config.HistorySync.SkipRecentSync)
 	return resetTimer, nil
 }
 
