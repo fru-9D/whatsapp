@@ -113,7 +113,17 @@ func (mc *MessageConverter) convertMediaMessage(
 			},
 		}
 	} else if err := mc.reuploadWhatsAppAttachment(ctx, msg, preparedMedia); err != nil {
-		part = mc.makeMediaFailure(ctx, preparedMedia, mediaKeys, err)
+		if errors.Is(err, ErrMediaSkipped) {
+			part = &bridgev2.ConvertedMessagePart{
+				Type: event.EventMessage,
+				Content: &event.MessageEventContent{
+					MsgType: event.MsgNotice,
+					Body:    fmt.Sprintf("Skipped syncing %s", preparedMedia.TypeDescription),
+				},
+			}
+		} else {
+			part = mc.makeMediaFailure(ctx, preparedMedia, mediaKeys, err)
+		}
 	} else {
 		part = &bridgev2.ConvertedMessagePart{
 			Type:    preparedMedia.Type,
@@ -145,6 +155,10 @@ func (mc *MessageConverter) convertAlbumMessage(ctx context.Context, msg *waE2E.
 		},
 	}, msg.GetContextInfo()
 }
+
+var (
+	ErrMediaSkipped = errors.New("media skipped")
+)
 
 const FailedMediaField = "fi.mau.whatsapp.failed_media"
 
@@ -346,7 +360,7 @@ func (mc *MessageConverter) reuploadWhatsAppAttachment(
 	// Check if media should be skipped during backfill
 	if isBackfill, ok := ctx.Value(ContextKeyIsBackfill).(bool); ok && isBackfill {
 		if skipMedia, ok := ctx.Value(ContextKeySkipMedia).(bool); ok && skipMedia {
-			return nil
+			return ErrMediaSkipped
 		}
 	}
 
