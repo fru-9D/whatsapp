@@ -29,6 +29,7 @@ import (
 
 	"github.com/rs/zerolog"
 	"go.mau.fi/util/exsync"
+	"go.mau.fi/util/ptr"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waMmsRetry"
 	"go.mau.fi/whatsmeow/types/events"
@@ -85,17 +86,24 @@ func (wa *WhatsAppConnector) downloadAvatarDirectMedia(ctx context.Context, pars
 		return nil, fmt.Errorf("failed to get avatar cache entry: %w", err)
 	}
 	if cachedInfo != nil && cachedInfo.Gone {
-		return nil, mautrix.MNotFound.WithMessage("Avatar is no longer available")
+		return nil, mautrix.MNotFound.WithMessage("Avatar is no longer available (cached response)")
 	} else if cachedInfo == nil || cachedInfo.Expiry.Time.Before(time.Now().Add(5*time.Minute)) {
 		zerolog.Ctx(ctx).Debug().
 			Str("avatar_id", parsedID.Avatar.AvatarID).
 			Msg("Refreshing avatar URL from WhatsApp servers")
-		avatar, err := waClient.Client.GetProfilePictureInfo(parsedID.Avatar.TargetJID, &whatsmeow.GetProfilePictureParams{
+		avatar, err := waClient.Client.GetProfilePictureInfo(ctx, parsedID.Avatar.TargetJID, &whatsmeow.GetProfilePictureParams{
 			IsCommunity: parsedID.Avatar.Community,
 		})
 		if errors.Is(err, whatsmeow.ErrProfilePictureNotSet) ||
 			errors.Is(err, whatsmeow.ErrProfilePictureUnauthorized) ||
 			(err == nil && (avatar == nil || avatar.ID != parsedID.Avatar.AvatarID)) {
+			zerolog.Ctx(ctx).Debug().
+				Err(err).
+				Stringer("target_jid", parsedID.Avatar.TargetJID).
+				Bool("is_community", parsedID.Avatar.Community).
+				Str("wanted_avatar_id", parsedID.Avatar.AvatarID).
+				Str("got_avatar_id", ptr.Val(avatar).ID).
+				Msg("Avatar is no longer available")
 			err = wa.DB.AvatarCache.Put(ctx, &wadb.AvatarCacheEntry{
 				EntityJID: parsedID.Avatar.TargetJID,
 				AvatarID:  parsedID.Avatar.AvatarID,
@@ -170,7 +178,7 @@ func (wa *WhatsAppConnector) downloadMessageDirectMedia(ctx context.Context, par
 	return &mediaproxy.GetMediaResponseFile{
 		Callback: func(f *os.File) error {
 			err := waClient.Client.DownloadToFile(ctx, keys, f)
-			if errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith403) || errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith404) || errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith410) {
+			if errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith403) || errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith404) || errors.Is(err, whatsmeow.ErrMediaDownloadFailedWith410) || errors.Is(err, whatsmeow.ErrNoURLPresent) {
 				val := params["fi.mau.whatsapp.reload_media"]
 				if val == "false" || (!wa.Config.DirectMediaAutoRequest && val != "true") {
 					return ErrReloadNeeded
@@ -262,7 +270,7 @@ func (wa *WhatsAppClient) requestDirectMedia(ctx context.Context, rawMsgID netwo
 	defer state.Unlock()
 	if !state.requested {
 		zerolog.Ctx(ctx).Debug().Msg("Sending request for missing media in direct download")
-		err := wa.sendMediaRequestDirect(rawMsgID, key)
+		err := wa.sendMediaRequestDirect(ctx, rawMsgID, key)
 		if err != nil {
 			return nil, fmt.Errorf("failed to send media retry request: %w", err)
 		}
